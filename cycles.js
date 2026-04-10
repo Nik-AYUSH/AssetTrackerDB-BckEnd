@@ -33,7 +33,6 @@ router.get('/', authMiddleware, async (req, res) => {
     `;
     const params = [];
 
-    // Suppliers only see their own cycles
     if (req.user.role === 'supplier') {
       query += ' WHERE c.vendor = ?';
       params.push(req.user.supplier_name);
@@ -87,7 +86,7 @@ router.get('/:id/audit', authMiddleware, async (req, res) => {
   res.json(rows);
 });
 
-// POST /api/cycles/dispatch — supplier or admin dispatches sets
+// POST /api/cycles/dispatch
 router.post('/dispatch', authMiddleware, requireRole('admin', 'supplier'), async (req, res) => {
   const { vendor, set_type, quantity_sent, vehicle, dispatch_date, notes } = req.body;
 
@@ -116,7 +115,7 @@ router.post('/dispatch', authMiddleware, requireRole('admin', 'supplier'), async
   }
 });
 
-// PATCH /api/cycles/:id/receive — TSS staff marks as received
+// PATCH /api/cycles/:id/receive
 router.patch('/:id/receive', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
   const { quantity_received, received_date, notes } = req.body;
   if (!quantity_received)
@@ -147,7 +146,7 @@ router.patch('/:id/receive', authMiddleware, requireRole('admin', 'tss_staff'), 
   }
 });
 
-// PATCH /api/cycles/:id/return — TSS staff marks sets as returned
+// PATCH /api/cycles/:id/return
 router.patch('/:id/return', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
   const { return_date, notes } = req.body;
 
