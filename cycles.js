@@ -46,29 +46,31 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/cycles/stats — dashboard stats
+
 router.get('/stats', authMiddleware, async (req, res) => {
   try {
     const [totals] = await pool.query(`
       SELECT
-        SUM(CASE WHEN set_type = 'FLC Set' THEN quantity_sent ELSE 0 END) as total_flc,
-        SUM(CASE WHEN set_type = 'W/C Set' THEN quantity_sent ELSE 0 END) as total_wc,
-        SUM(quantity_sent - quantity_received) as in_transit,
-        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_cycles,
-        SUM(CASE WHEN status != 'completed' THEN 1 ELSE 0 END) as open_cycles,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as closed_cycles
+        SUM(CASE WHEN set_type='FLC Set' THEN quantity_sent ELSE 0 END) as total_flc,
+        SUM(CASE WHEN set_type='W/C Set' THEN quantity_sent ELSE 0 END) as total_wc,
+        SUM(quantity_sent)                  as dispatched_from_supplier,
+        SUM(quantity_received)              as received_at_tss,
+        SUM(quantity_dispatched_tss)        as dispatched_from_tss,
+        SUM(quantity_received_supplier)     as received_at_supplier,
+        SUM(CASE WHEN status='pending'    THEN 1 ELSE 0 END) as pending_cycles,
+        SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END) as open_cycles,
+        SUM(CASE WHEN status='completed'  THEN 1 ELSE 0 END) as closed_cycles
       FROM cycles
     `);
 
     const [byLocation] = await pool.query(`
-      SELECT
-        vendor,
-        set_type,
-        SUM(quantity_sent) as sent,
-        SUM(quantity_received) as received,
-        SUM(quantity_sent - quantity_received) as balance
-      FROM cycles
-      GROUP BY vendor, set_type
+      SELECT vendor, set_type,
+        SUM(quantity_sent)              as sent,
+        SUM(quantity_received)          as received,
+        SUM(quantity_dispatched_tss)    as dispatched_tss,
+        SUM(quantity_received_supplier) as received_supplier,
+        SUM(quantity_sent - quantity_received_supplier) as balance
+      FROM cycles GROUP BY vendor, set_type
     `);
 
     res.json({ totals: totals[0], byLocation });
@@ -116,53 +118,62 @@ router.post('/dispatch', authMiddleware, requireRole('admin', 'supplier'), async
 });
 
 // PATCH /api/cycles/:id/receive
-router.patch('/:id/receive', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
-  const { quantity_received, received_date, notes } = req.body;
-  if (!quantity_received)
-    return res.status(400).json({ error: 'quantity_received is required' });
+// PATCH /api/cycles/:id/dispatch-return — TSS dispatches sets back
+router.patch('/:id/dispatch-return', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
+  const { quantity_dispatched_tss, dispatch_return_date, notes } = req.body;
 
   try {
     const [rows] = await pool.query('SELECT * FROM cycles WHERE cycle_id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Cycle not found' });
 
     const cycle = rows[0];
-    const newReceived = cycle.quantity_received + parseInt(quantity_received);
-    if (newReceived > cycle.quantity_sent)
-      return res.status(400).json({ error: `Cannot receive more than sent (${cycle.quantity_sent})` });
+    const newQty = (cycle.quantity_dispatched_tss || 0) + parseInt(quantity_dispatched_tss || 0);
 
-    const newStatus = newReceived >= cycle.quantity_sent ? 'in_progress' : 'pending';
+    if (newQty > cycle.quantity_received)
+      return res.status(400).json({ error: `Cannot dispatch more than received at TSS (${cycle.quantity_received})` });
 
     await pool.query(`
-      UPDATE cycles SET quantity_received = ?, received_date = ?, status = ?, received_by = ?, notes = CONCAT(IFNULL(notes,''), ?)
+      UPDATE cycles SET quantity_dispatched_tss = ?, return_date = ?,
+      notes = CONCAT(IFNULL(notes,''), ?)
       WHERE cycle_id = ?
-    `, [newReceived, received_date || null, newStatus, req.user.id, notes ? '\n' + notes : '', req.params.id]);
+    `, [newQty, dispatch_return_date || null, notes ? '\nTSS Dispatch: ' + notes : '', req.params.id]);
 
-    await logAudit(req.params.id, 'RECEIVED AT TSS', req.user,
-      `${quantity_received} sets received. Total received: ${newReceived}/${cycle.quantity_sent}`);
+    await logAudit(req.params.id, 'DISPATCHED FROM TSS', req.user,
+      `${quantity_dispatched_tss} sets dispatched from TSS back to supplier. Total: ${newQty}/${cycle.quantity_received}`);
 
-    res.json({ message: 'Received recorded', cycle_id: req.params.id });
+    res.json({ message: 'TSS dispatch recorded', cycle_id: req.params.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// PATCH /api/cycles/:id/return
-router.patch('/:id/return', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
-  const { return_date, notes } = req.body;
+// PATCH /api/cycles/:id/receive-supplier — Supplier confirms receipt
+router.patch('/:id/receive-supplier', authMiddleware, requireRole('admin', 'supplier'), async (req, res) => {
+  const { quantity_received_supplier, received_supplier_date, notes } = req.body;
 
   try {
     const [rows] = await pool.query('SELECT * FROM cycles WHERE cycle_id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Cycle not found' });
 
+    const cycle = rows[0];
+    const newQty = (cycle.quantity_received_supplier || 0) + parseInt(quantity_received_supplier || 0);
+
+    if (newQty > cycle.quantity_dispatched_tss)
+      return res.status(400).json({ error: `Cannot receive more than dispatched from TSS (${cycle.quantity_dispatched_tss})` });
+
+    const isComplete = newQty >= cycle.quantity_sent;
+
     await pool.query(`
-      UPDATE cycles SET return_date = ?, status = 'completed', notes = CONCAT(IFNULL(notes,''), ?)
+      UPDATE cycles SET quantity_received_supplier = ?,
+      status = ?, notes = CONCAT(IFNULL(notes,''), ?)
       WHERE cycle_id = ?
-    `, [return_date || null, notes ? '\nReturn: ' + notes : '', req.params.id]);
+    `, [newQty, isComplete ? 'completed' : 'in_progress',
+        notes ? '\nSupplier Received: ' + notes : '', req.params.id]);
 
-    await logAudit(req.params.id, 'RETURNED TO SUPPLIER', req.user,
-      `Sets returned to supplier. Notes: ${notes || 'none'}`);
+    await logAudit(req.params.id, 'RECEIVED AT SUPPLIER', req.user,
+      `${quantity_received_supplier} sets received back at supplier. Total: ${newQty}/${cycle.quantity_sent}`);
 
-    res.json({ message: 'Return recorded', cycle_id: req.params.id });
+    res.json({ message: 'Supplier receipt recorded', cycle_id: req.params.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
