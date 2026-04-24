@@ -67,23 +67,23 @@ router.get('/supplier-to-tss', authMiddleware, async (req, res) => {
  
 // POST new entry
 router.post('/supplier-to-tss', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
-  const { date, vendor, opening_stock, closing_stock, qty_dispatched, remarks } = req.body;
-  if (!date || !vendor || opening_stock === undefined || closing_stock === undefined || qty_dispatched === undefined)
-    return res.status(400).json({ error: 'date, vendor, opening_stock, closing_stock and qty_dispatched are required' });
+  const { date, vendor, opening_flc, opening_wc, closing_flc, closing_wc, dispatched_flc, dispatched_wc, remarks } = req.body;
+  if (!date || !vendor)
+    return res.status(400).json({ error: 'date and vendor required' });
   try {
     await pool.query(`
-      INSERT INTO log_supplier_to_tss (date, vendor, opening_stock, closing_stock, qty_dispatched, remarks, logged_by, logged_by_name)
-      VALUES (?,?,?,?,?,?,?,?)
-    `, [date, vendor, opening_stock, closing_stock, qty_dispatched, remarks || null, req.user.id, req.user.name]);
+      INSERT INTO log_supplier_to_tss
+        (date, vendor, opening_flc, opening_wc, closing_flc, closing_wc, dispatched_flc, dispatched_wc, remarks, logged_by, logged_by_name)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `, [date, vendor,
+        opening_flc||0, opening_wc||0,
+        closing_flc||0, closing_wc||0,
+        dispatched_flc||0, dispatched_wc||0,
+        remarks||null, req.user.id, req.user.name]);
     res.json({ message: 'Entry logged' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
- 
-// DELETE
-router.delete('/supplier-to-tss/:id', authMiddleware, requireRole('admin'), async (req, res) => {
-  await pool.query('DELETE FROM log_supplier_to_tss WHERE id = ?', [req.params.id]);
-  res.json({ message: 'Entry deleted' });
-});
+
  
  
 // ════════════════════════════════════════
@@ -107,14 +107,19 @@ router.get('/tss-to-supplier', authMiddleware, async (req, res) => {
  
 // POST new entry
 router.post('/tss-to-supplier', authMiddleware, requireRole('admin', 'tss_staff'), async (req, res) => {
-  const { date, vendor, opening_stock, closing_stock, qty_dispatched, remarks } = req.body;
-  if (!date || !vendor || opening_stock === undefined || closing_stock === undefined || qty_dispatched === undefined)
-    return res.status(400).json({ error: 'date, vendor, opening_stock, closing_stock and qty_dispatched are required' });
+  const { date, vendor, opening_flc, opening_wc, closing_flc, closing_wc, dispatched_flc, dispatched_wc, remarks } = req.body;
+  if (!date || !vendor)
+    return res.status(400).json({ error: 'date and vendor required' });
   try {
     await pool.query(`
-      INSERT INTO log_tss_to_supplier (date, vendor, opening_stock, closing_stock, qty_dispatched, remarks, logged_by, logged_by_name)
-      VALUES (?,?,?,?,?,?,?,?)
-    `, [date, vendor, opening_stock, closing_stock, qty_dispatched, remarks || null, req.user.id, req.user.name]);
+      INSERT INTO log_tss_to_supplier
+        (date, vendor, opening_flc, opening_wc, closing_flc, closing_wc, dispatched_flc, dispatched_wc, remarks, logged_by, logged_by_name)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `, [date, vendor,
+        opening_flc||0, opening_wc||0,
+        closing_flc||0, closing_wc||0,
+        dispatched_flc||0, dispatched_wc||0,
+        remarks||null, req.user.id, req.user.name]);
     res.json({ message: 'Entry logged' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
