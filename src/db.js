@@ -1,6 +1,6 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
-
+ 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT || 3306,
@@ -10,11 +10,12 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
 });
-
+ 
 async function initDB() {
   const conn = await pool.getConnection();
   try {
-    // Users table
+ 
+    // ── Users ──
     await conn.query(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -26,32 +27,67 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-
-    // Cycles table
+ 
+    // ── Cycles ──
     await conn.query(`
       CREATE TABLE IF NOT EXISTS cycles (
         id INT AUTO_INCREMENT PRIMARY KEY,
         cycle_id VARCHAR(20) UNIQUE NOT NULL,
         vendor ENUM('Mahasai','Sanvijay') NOT NULL,
         set_type ENUM('FLC Set','W/C Set') NOT NULL,
-        quantity_sent INT NOT NULL DEFAULT 0,
-        quantity_received INT NOT NULL DEFAULT 0,
+ 
+        -- Step 1: YMKS → Supplier
+        qty_ymks_dispatched      INT NOT NULL DEFAULT 0,
+ 
+        -- Step 2: Supplier → TSS
+        qty_supplier_to_tss      INT NOT NULL DEFAULT 0,
+ 
+        -- Step 3: TSS Receives
+        qty_received_at_tss      INT NOT NULL DEFAULT 0,
+        qty_arrived_loaded       INT NOT NULL DEFAULT 0,
+        qty_arrived_empty        INT NOT NULL DEFAULT 0,
+        qty_emptied_at_tss       INT NOT NULL DEFAULT 0,
+ 
+        -- Step 6: TSS → Supplier
+        qty_dispatched_from_tss  INT NOT NULL DEFAULT 0,
+ 
+        -- Step 8: Supplier receives back
+        qty_received_at_supplier INT NOT NULL DEFAULT 0,
+ 
+        -- Step 9: Supplier → YMKS
+        qty_returned_to_ymks     INT NOT NULL DEFAULT 0,
+ 
+        -- Meta
         vehicle VARCHAR(50),
         dispatch_date DATE,
-        received_date DATE,
         return_date DATE,
         status ENUM('pending','in_progress','completed') DEFAULT 'pending',
         dispatched_by INT,
-        received_by INT,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (dispatched_by) REFERENCES users(id),
-        FOREIGN KEY (received_by) REFERENCES users(id)
+        FOREIGN KEY (dispatched_by) REFERENCES users(id)
       )
     `);
-
-    // Audit log table
+ 
+    // ── TSS Daily Stock ──
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS tss_daily_stock (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE NOT NULL,
+        opening_stock           INT NOT NULL DEFAULT 0,
+        qty_emptied             INT NOT NULL DEFAULT 0,
+        qty_ready_for_dispatch  INT NOT NULL DEFAULT 0,
+        qty_dispatched          INT NOT NULL DEFAULT 0,
+        closing_stock           INT NOT NULL DEFAULT 0,
+        logged_by INT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (logged_by) REFERENCES users(id)
+      )
+    `);
+ 
+    // ── Audit Log ──
     await conn.query(`
       CREATE TABLE IF NOT EXISTS audit_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -63,23 +99,23 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-
-    // Seed default admin user if not exists
+ 
+    // ── Seed default admin ──
     const bcrypt = require('bcryptjs');
     const [rows] = await conn.query(`SELECT id FROM users WHERE username = 'admin'`);
     if (rows.length === 0) {
       const hash = await bcrypt.hash('admin123', 10);
-      await conn.query(`
-        INSERT INTO users (name, username, password_hash, role)
-        VALUES ('Administrator', 'admin', ?, 'admin')
-      `, [hash]);
-      console.log('✅ Default admin created — username: admin, password: admin123');
+      await conn.query(
+        `INSERT INTO users (name, username, password_hash, role) VALUES ('Administrator','admin',?,'admin')`,
+        [hash]
+      );
+      console.log('✅ Default admin created — username: admin / password: admin123');
     }
-
+ 
     console.log('✅ Database initialized');
   } finally {
     conn.release();
   }
 }
-
+ 
 module.exports = { pool, initDB };
