@@ -231,4 +231,17 @@ router.delete('/:id', authMiddleware, requireRole('admin'), async (req, res) => 
   res.json({ message: 'Cycle deleted' });
 });
 
+router.patch('/:id/force-complete', authMiddleware, requireRole('admin'), async (req, res) => {
+  const { notes } = req.body;
+  try {
+    await pool.query(
+      `UPDATE cycles SET status='completed' WHERE cycle_id=?`,
+      [req.params.id]
+    );
+    await logAudit(req.params.id, 'FORCE COMPLETED', req.user,
+      notes || 'Cycle manually closed by admin');
+    res.json({ message: 'Cycle marked complete' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;
